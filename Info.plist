@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>RestReminder</string>
+    <key>CFBundleIdentifier</key><string>local.restreminder.mac</string>
+    <key>CFBundleName</key><string>歇一会儿</string>
+    <key>CFBundleDisplayName</key><string>歇一会儿</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key><string>12.0</string>
+    <key>LSMinimumSystemVersionByArchitecture</key>
+    <dict>
+        <key>arm64</key><string>12.0</string>
+        <key>x86_64</key><string>13.0</string>
+    </dict>
+    <key>LSUIElement</key><true/>
+    <key>LSMultipleInstancesProhibited</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSAudioCaptureUsageDescription</key><string>仅在内存中计算系统输出音量，避免看视频时弹出休息提醒；不保存、上传或识别声音内容。</string>
+</dict>
+</plist>

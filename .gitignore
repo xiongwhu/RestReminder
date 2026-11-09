@@ -1,0 +1,7 @@
+# Local builds, compiler caches, synthetic test archives and release staging.
+/build/
+.DS_Store
+
+# Unused exploratory photographs; no documented provenance for publication.
+/Resources/morning-light.jpg
+/Resources/fresh-leaves.jpg

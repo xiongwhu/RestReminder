@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: CPAL-1.0
+# The contents of this file are subject to the Common Public Attribution License Version 1.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at https://opensource.org/license/cpal-1-0. The License is based on the Mozilla Public License Version 1.1 but Sections 14 and 15 have been added to cover use of software over a computer network and provide for limited attribution for the Original Developer. In addition, Exhibit A has been modified to be consistent with Exhibit B.
+#
+# Software distributed under the License is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+#
+# The Original Code is RestReminder (歇一会儿), including the original source code, tests and build scripts distributed in this repository. Third-party photographs identified in Resources/PHOTO-CREDITS.md are excluded and remain subject to their original licenses.
+# The Initial Developer of the Original Code is 广州迈润网络科技有限公司 (迈润智人 RaCIO).
+# The Original Developer is the Initial Developer.
+# All portions of the code written by the Initial Developer are Copyright (c) 2026 广州迈润网络科技有限公司. All Rights Reserved.
+# Contributor(s): see individual source notices and project history.
+# No alternative license is designated for the Original Code.
+# Attribution information: see Exhibit B in the repository LICENSE.
+
+name: Native tests and Universal build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the runner's selected Xcode and macOS SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          developer_dir="$(/usr/bin/xcode-select -p)"
+          [[ -d "$developer_dir" ]]
+          printf 'DEVELOPER_DIR=%s\n' "$developer_dir" >> "$GITHUB_ENV"
+          /usr/bin/xcodebuild -version
+          /usr/bin/xcrun --sdk macosx --show-sdk-version
+
+      - name: Run deterministic native suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          /bin/bash -n build.sh
+          /bin/bash -n scripts/test.sh
+          /usr/bin/plutil -lint Info.plist
+          python3 scripts/check-docs.py
+          ./scripts/test.sh
+
+      - name: Build both architectures with verified deployment minima
+        shell: bash
+        env:
+          ARCHS: universal
+          REQUIRE_APP_ICON: '1'
+        run: ./build.sh
+
+      - name: Verify and package the ad-hoc build with corresponding source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./build.sh --verify-only 2>&1 | tee build/validation.txt
+          python3 scripts/prepare-release.py --app 'build/歇一会儿.app'
+
+      # This is a CI artifact with a local ad-hoc signature. No release, Developer ID,
+      # notarization, GUI smoke, real-device metadata flag, or audio capture is run here.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RestReminder-validation-${{ github.run_number }}
+          path: |
+            build/release/v*/SHA256SUMS
+            build/release/v*/release-manifest.json
+            build/validation.txt
+          if-no-files-found: error
+          retention-days: 14
