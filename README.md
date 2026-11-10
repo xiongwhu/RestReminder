@@ -10,7 +10,7 @@
 
 使用 Swift 与 AppKit 编写，无第三方运行依赖。应用运行时不联网，无需账户，活动记录保存在本机。
 
-源码：[GitHub 主仓库](https://github.com/xiongwhu/RestReminder) · [Gitee 账号入口](https://gitee.com/dukexls/projects)（同名镜像创建中）
+源码：[GitHub 主仓库](https://github.com/xiongwhu/RestReminder) · [Gitee 源码镜像](https://gitee.com/dukexls/RestReminder)
 
 [功能亮点](#功能亮点) · [快速开始](#快速开始) · [如何使用](#如何使用) · [隐私与权限](#隐私与权限) · [开发与文档](#开发与文档) · [关于我们](#关于我们) · [CPAL 许可与署名](#许可与品牌署名)
 
@@ -33,7 +33,7 @@
 
 ## 快速开始
 
-首个公开源码版本为 **v1.0.0**，应用版本见 [VERSION](VERSION)，功能变化见[更新日志](CHANGELOG.md)。GitHub 为主仓库，Gitee 镜像同步相同提交与版本标签，当前正在创建。
+首个公开源码版本为 **v1.0.0**，应用版本见 [VERSION](VERSION)，功能变化见[更新日志](CHANGELOG.md)。GitHub 主仓库与 Gitee 源码镜像均已公开，保留相同的版本标签。
 
 本次先发布源码，不提供二进制试用发行。可按下方步骤自行构建；本机构建产物为 ad-hoc 签名，尚未完成 Developer ID 签名或 Apple 公证。
 
@@ -49,12 +49,24 @@
 
 本地运行验证环境为 Apple Silicon / macOS 27。Intel 已完成交叉编译；macOS 12/13 及 Intel 实机体验仍待对应设备验收。部署目标与验证范围详见[技术设计](docs/design.md#102-兼容性事实)。
 
+### 仓库与版本
+
+| 平台 | 用途 | 仓库 |
+| --- | --- | --- |
+| GitHub | 主仓库、问题反馈、Pull Request 与 CI | [xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) |
+| Gitee | 同源源码镜像、备用克隆与下载入口 | [dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) |
+
+镜像由维护者同步 `main` 和版本标签；一次导入不等于自动同步服务。需要固定版本时，可在克隆后执行 `git checkout v1.0.0`；日常更新使用 `main`，核对版本时以同名标签和提交 SHA 为准。问题反馈和贡献优先提交到 [GitHub Issues](https://github.com/xiongwhu/RestReminder/issues) 与主仓库 Pull Request。
+
 ### 从源码构建
 
-从 GitHub 克隆，或从仓库页面下载源码 ZIP，在项目根目录运行：
+任选一个平台克隆，或从对应仓库页面下载源码 ZIP，在项目根目录运行：
 
 ```bash
+# GitHub 主仓库
 git clone https://github.com/xiongwhu/RestReminder.git
+# 也可以把上一行替换为 Gitee 镜像：
+# git clone https://gitee.com/dukexls/RestReminder.git
 cd RestReminder
 ./build.sh
 ./build.sh --verify-only

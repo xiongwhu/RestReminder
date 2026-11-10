@@ -1,10 +1,10 @@
 # GitHub 与 Gitee 发布流程
 
-此文面向维护者。当前首发候选为 **v1.0.0**；[VERSION](VERSION) 与 [应用清单](Info.plist) 均为 1.0.0。文档修订号不用于应用标签。
+此文面向维护者。首个公开源码版本为 **v1.0.0**；[VERSION](VERSION) 与 [应用清单](Info.plist) 均为 1.0.0。文档修订号不用于应用标签。
 
 ## 仓库安排
 
-已确认使用 [GitHub xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) 作为公开主仓库，Gitee 同步相同源码与标签；Gitee 目标账号为 [dukexls](https://gitee.com/dukexls/projects)，同名镜像正在创建。首发版本为 v1.0.0，仅公开源码和标签，不创建二进制试用发行。实际仓库链接同步写入 [README](README.md)，镜像未就绪时明确标记。
+[GitHub xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) 为公开主仓库，[Gitee dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) 为公开源码镜像。首发版本为 v1.0.0，仅公开源码和标签，不创建二进制试用发行。两个平台的 `main`、附注标签对象与 `v1.0.0^{}` 已核对一致；仓库入口同步写入 [README](README.md)。镜像采用维护者推送或平台同步，首次导入本身不建立自动同步。
 
 - GitHub remote：`origin`。
 - Gitee remote：`gitee`。
