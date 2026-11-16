@@ -37,7 +37,7 @@
 
 ### 下载 DMG 安装
 
-从 **[GitHub Release v1.0.1](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)** 下载 `RestReminder-1.0.1-macos-universal.dmg`，可用同页 `SHA256SUMS` 核对文件。
+从 **[Gitee 发行版 v1.0.1](https://gitee.com/dukexls/RestReminder/releases/tag/v1.0.1)** 或 **[GitHub Release v1.0.1](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)** 下载 `RestReminder-1.0.1-macos-universal.dmg`，可用同页 `SHA256SUMS` 核对文件。两个平台提供相同的发行说明和原始附件，五个文件的 SHA-256 已逐一核对一致。
 
 1. 安装或更新前，从菜单退出正在运行的“歇一会儿”。
 2. 打开 DMG，将“歇一会儿”拖到旁边的 **Applications（应用程序）** 入口。
@@ -63,7 +63,7 @@ DMG 随附精确对应的源码 ZIP、CPAL 许可、摄影来源和安装说明�
 | 平台 | 用途 | 仓库 |
 | --- | --- | --- |
 | GitHub | 主仓库、问题反馈、Pull Request 与 CI | [xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) |
-| Gitee | 同源源码镜像、备用克隆与下载入口 | [dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) |
+| Gitee | 同源源码与发行附件镜像、备用克隆与下载入口 | [dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) |
 
 镜像由维护者同步 `main` 和版本标签；一次导入不等于自动同步服务。需要固定版本时，可在克隆后执行 `git checkout v1.0.1`；日常更新使用 `main`，核对版本时以同名标签和提交 SHA 为准。问题反馈和贡献优先提交到 [GitHub Issues](https://github.com/xiongwhu/RestReminder/issues) 与主仓库 Pull Request。
 
@@ -235,4 +235,4 @@ CPAL-1.0 不是“只保留署名即可任意闭源分发”的许可。受覆�
 
 ### 发布状态
 
-v1.0.1 提供源码、版本标签与 Universal DMG / ZIP 下载，发行内容见 [GitHub Release](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)。二进制为 ad-hoc 签名，目标设备验收与正式签名公证的范围见本页系统要求及发行说明；源码使用按本仓库 CPAL-1.0 条款执行。
+v1.0.1 提供源码、版本标签与 Universal DMG / ZIP 下载，发行内容见 [Gitee 发行版](https://gitee.com/dukexls/RestReminder/releases/tag/v1.0.1) 或 [GitHub Release](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)。二进制为 ad-hoc 签名，目标设备验收与正式签名公证的范围见本页系统要求及发行说明；源码使用按本仓库 CPAL-1.0 条款执行。

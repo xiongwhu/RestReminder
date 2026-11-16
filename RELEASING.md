@@ -5,8 +5,8 @@
 ## 仓库与发行范围
 
 - [GitHub xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) 为公开主仓库，remote 为 `origin`，默认分支为 `main`。
-- [Gitee dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) 为源码镜像，remote 为 `gitee`；同步 `main` 和附注版本标签。
-- 安装包与发行材料发布到 [GitHub Release v1.0.1](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)。镜像同步源码及标签不等于自动同步二进制附件或流水线。
+- [Gitee dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) 为源码与发行附件镜像，remote 为 `gitee`；同步 `main` 和附注版本标签。
+- 安装包与发行材料同时提供于 [Gitee 发行版 v1.0.1](https://gitee.com/dukexls/RestReminder/releases/tag/v1.0.1) 和 [GitHub Release v1.0.1](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)。发行说明和五个原始附件相同；Git 分支/标签与平台发行页面/附件分别同步，流水线仍仅在 GitHub 运行。
 - 两个平台的同名分支和标签必须指向一致的对象；不强制覆盖已有版本，不使用 `git push --mirror`。
 
 发布请求应明确版本范围、目标仓库和是否公开二进制。确认这些授权后，完成构建与候选材料验证，再提交、推送和发布；不把制作完成当作已经远程发布。
@@ -89,5 +89,17 @@ git push gitee main v1.0.1
 远端标签存在后，通过 GitHub API、已认证 CLI 或网页创建该标签的 Release，使用同一份 UTF-8 发行说明，上传 DMG、源码 ZIP、应用 ZIP、构建清单和 SHA-256 文件。可先创建草稿，完成所有附件上传后再公开。
 
 公开后读取 Release、标签和附件列表，核对版本、目标提交、文件名、大小、SHA-256 与下载入口。GitHub Actions 的运行状态以对应发布提交的真实结果为准；本地测试不等于远程绿色运行，也不等于 Apple 公证或 Intel/旧系统实机验收。
+
+## Gitee 发行版与附件同步
+
+Git 推送只同步源码和标签。Gitee 的发行版与附件需要另外发布；Git 推送凭据不一定能用于 Open API，使用带 `projects` 权限的短期访问令牌，或通过已登录网页操作。
+
+1. 复用 GitHub 对应版本的标题、完整更新说明、原始版本标签和目标提交，不重新打包已有安装包，不移动公开标签。
+2. 根据 [Gitee 官方 API](https://gitee.com/api/v5/swagger)，通过 `GET /api/v5/repos/{owner}/{repo}/releases/tags/{tag}` 检查发行版；不存在时，通过 `POST /api/v5/repos/{owner}/{repo}/releases` 创建。
+3. 通过 `POST /api/v5/repos/{owner}/{repo}/releases/{release_id}/attach_files` 以 multipart 上传五个原始文件。已有附件先比对，避免重复或覆盖维护者已有内容。
+4. 匿名读取发行页和下载链接，逐个下载附件并比对字节数及 SHA-256；不能只核对文件名或上传成功响应。
+5. 令牌只在内存或权限为 `600` 的本机临时文件中使用；不写入仓库、发行说明、报告或日志，发布完成后删除临时文件。
+
+v1.0.1 的 Gitee 发行 ID 为 `1315430`，指向提交 `65765cb056f8745f21ca83c3e12fb709ef1edef6`；五个附件已通过无需登录的下载及哈希比对。下载入口的后续文档提交不改变 v1.0.1 标签、对应源码树或安装包内容。
 
 当前系统范围与隐私约定见 [README](README.md)，源码与素材许可见 [LICENSE](LICENSE) 和 [摄影来源](Resources/PHOTO-CREDITS.md)。
