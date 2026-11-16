@@ -131,7 +131,7 @@ done
 SOURCES=(PresentationProtection.swift StatusProgressRing.swift RestEscalation.swift
     StrongRestWindow.swift ActivityHistory.swift HistoryWindow.swift AudioPlaybackMonitor.swift
     ActivitySession.swift ReturnCelebration.swift main.swift SingleInstanceGuard.swift
-    RestContinuousClock.swift RestAdvice.swift VoluntaryRest.swift AboutBrandView.swift)
+    RestContinuousClock.swift RestAdvice.swift VoluntaryRest.swift AboutBrandView.swift ReminderSettings.swift)
 for index in "${!SOURCES[@]}"; do
     SOURCES[$index]="$PROJECT_DIR/Sources/${SOURCES[$index]}"
     [[ -f "${SOURCES[$index]}" ]] || fail "Missing app source: ${SOURCES[$index]}"

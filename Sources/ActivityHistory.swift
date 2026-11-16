@@ -209,7 +209,10 @@ final class ActivityHistory {
     private var lastSample: Date?
     private var lastUptime: TimeInterval?
     private var lastSaved: Date?
+    private var automaticRetryAt: TimeInterval?
+    private var automaticFailureCount = 0
     private var suspended = false
+    private let retryClock: () -> TimeInterval
     private let storageURL: URL?
     private let preferences: ActivityHistoryPreferences?
     private let archiveWriter: (Data, URL) throws -> Void
@@ -229,8 +232,10 @@ final class ActivityHistory {
 
     init(storageURL: URL? = ActivityHistory.defaultURL, retentionDays: Int? = nil,
          preferences: ActivityHistoryPreferences? = nil,
-         archiveWriter: ((Data, URL) throws -> Void)? = nil) {
+         archiveWriter: ((Data, URL) throws -> Void)? = nil,
+         retryClock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.storageURL = storageURL
+        self.retryClock = retryClock
         let store = preferences ?? (storageURL == Self.defaultURL ? UserDefaults.standard : nil)
         self.preferences = store
         let choice = retentionDays ?? store?.historyRetentionDays ?? 0
@@ -266,7 +271,12 @@ final class ActivityHistory {
     func sample(at date: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
                 idle: TimeInterval, restThreshold: TimeInterval) {
         guard idle.isFinite, idle >= 0, restThreshold.isFinite, restThreshold > 0 else { return }
-        if let lastSample, date < lastSample { return } // Avoid negative or overlapping spans on clock rollback.
+        if let lastSample, date < lastSample {
+            // Freeze new observations during rollback, but keep pending storage
+            // recovery on its monotonic schedule using only the trusted snapshot.
+            if automaticRetryAt != nil { persist(at: lastSample) }
+            return
+        }
         if current == nil, let lastEnd = records.last?.end, date < lastEnd { return }
         if let recordingFloor, date < recordingFloor { return }
         if observedSince == nil { observedSince = date }
@@ -315,17 +325,26 @@ final class ActivityHistory {
     }
 
     func resume(at date: Date = Date()) {
-        guard suspended, date >= (lastSample ?? .distantPast) else { return }
-        if let end = current?.end { current?.end = max(end, date) }
+        guard suspended else { return }
         suspended = false
-        lastSample = date
         lastUptime = nil
+        if let lastSample, date < lastSample {
+            // A return event must release the lifecycle state even when wall time
+            // moved backwards. Keep only trusted observations, then wait for the
+            // existing sample boundary before beginning a fresh interval.
+            close(at: lastSample)
+            observedSince = nil
+            persist(at: lastSample)
+            return
+        }
+        if let end = current?.end { current?.end = max(end, date) }
+        lastSample = date
         persist(at: date)
     }
 
     func finish(at date: Date = Date()) {
         close(at: max(lastSample ?? date, date))
-        persist(at: date)
+        persist(at: date, finalAttempt: true)
     }
 
     func day(_ date: Date, now: Date = Date(), calendar: Calendar = .current,
@@ -552,6 +571,7 @@ final class ActivityHistory {
         }
         editRevision += 1
         lastSaved = date
+        resetAutomaticRetry()
         persistenceError = nil
     }
 
@@ -570,7 +590,9 @@ final class ActivityHistory {
     }
 
     private func checkpoint(at date: Date) {
-        if lastSaved.map({ date.timeIntervalSince($0) >= 30 }) ?? true { persist(at: date) }
+        if automaticRetryAt != nil || (lastSaved.map({ date.timeIntervalSince($0) >= 30 }) ?? true) {
+            persist(at: date)
+        }
     }
 
     private func writeSnapshot(records: [ActivityRecord], current: ActivityRecord?) throws {
@@ -587,8 +609,15 @@ final class ActivityHistory {
         persistenceError = "未更改历史记录：\(error.localizedDescription)"
     }
 
-    private func persist(at date: Date) {
+    private func resetAutomaticRetry() {
+        automaticRetryAt = nil
+        automaticFailureCount = 0
+    }
+
+    private func persist(at date: Date, finalAttempt: Bool = false) {
         guard canPersist else { return }
+        let attemptTime = retryClock()
+        if !finalAttempt, let automaticRetryAt, attemptTime < automaticRetryAt { return }
         do {
             // Pruning uses the same staged write as explicit deletion. A failed write retains every old span.
             if retentionDays > 0 {
@@ -600,8 +629,12 @@ final class ActivityHistory {
             }
             try writeSnapshot(records: records, current: current)
             lastSaved = date
+            resetAutomaticRetry()
             persistenceError = nil
         } catch {
+            let delays: [TimeInterval] = [5, 15, 30, 60]
+            automaticFailureCount = min(automaticFailureCount + 1, delays.count)
+            automaticRetryAt = attemptTime + delays[automaticFailureCount - 1]
             persistenceError = "本地保存失败，记录暂存内存：\(error.localizedDescription)"
         }
     }

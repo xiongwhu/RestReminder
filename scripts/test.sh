@@ -18,16 +18,16 @@
 #
 # For Exhibit B Attribution Information, see the root LICENSE file.
 
-# Deterministic, native tests only. Usage: ./scripts/test.sh [timing audio locks escalation history protection ring advice instance voluntary]
+# Deterministic, native tests only. Usage: ./scripts/test.sh [timing audio locks escalation history protection ring advice instance voluntary settings]
 # Does not launch the app, audio capture, metadata smoke, login registration, or fullscreen UI.
 # SWIFTC/SDKROOT/DEVELOPER_DIR follow build.sh; TEST_DEPLOYMENT_TARGET can require a minimum.
 set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
-if [[ "$#" -eq 0 ]]; then set -- timing audio locks escalation history protection ring advice instance voluntary; fi
+if [[ "$#" -eq 0 ]]; then set -- timing audio locks escalation history protection ring advice instance voluntary settings; fi
 for suite in "$@"; do
     case "$suite" in
-        timing|audio|locks|escalation|history|protection|ring|advice|instance|voluntary) ;;
+        timing|audio|locks|escalation|history|protection|ring|advice|instance|voluntary|settings) ;;
         *) fail "Unknown deterministic suite: $suite" ;;
     esac
 done
@@ -69,6 +69,7 @@ for suite in "$@"; do
         advice) sources=(Sources/RestAdvice.swift Tests/RestAdviceTests.swift) ;;
         instance) sources=(Sources/SingleInstanceGuard.swift Tests/SingleInstanceTests.swift) ;;
         voluntary) sources=(Sources/VoluntaryRest.swift Sources/ActivityHistory.swift Tests/VoluntaryRestTests.swift) ;;
+        settings) sources=(Sources/ReminderSettings.swift Tests/ReminderSettingsTests.swift) ;;
         *) fail "Unknown deterministic suite: $suite" ;;
     esac
     for index in "${!sources[@]}"; do

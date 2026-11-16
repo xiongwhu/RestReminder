@@ -1,17 +1,23 @@
 # GitHub 与 Gitee 发布流程
 
-此文面向维护者。首个公开源码版本为 **v1.0.0**；[VERSION](VERSION) 与 [应用清单](Info.plist) 均为 1.0.0。文档修订号不用于应用标签。
+当前发行版本为 **v1.0.1**，应用构建号为 **2**；[VERSION](VERSION) 与 [应用清单](Info.plist) 必须一致。文档修订号不用于应用标签。v1.0.0 首次公开源码；v1.0.1 起提供包含对应源码的 Universal DMG 和 ZIP。
 
-## 仓库安排
+## 仓库与发行范围
 
-[GitHub xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) 为公开主仓库，[Gitee dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) 为公开源码镜像。首发版本为 v1.0.0，仅公开源码和标签，不创建二进制试用发行。两个平台的 `main`、附注标签对象与 `v1.0.0^{}` 已核对一致；仓库入口同步写入 [README](README.md)。镜像采用维护者推送或平台同步，首次导入本身不建立自动同步。
+- [GitHub xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) 为公开主仓库，remote 为 `origin`，默认分支为 `main`。
+- [Gitee dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) 为源码镜像，remote 为 `gitee`；同步 `main` 和附注版本标签。
+- 安装包与发行材料发布到 [GitHub Release v1.0.1](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)。镜像同步源码及标签不等于自动同步二进制附件或流水线。
+- 两个平台的同名分支和标签必须指向一致的对象；不强制覆盖已有版本，不使用 `git push --mirror`。
 
-- GitHub remote：`origin`。
-- Gitee remote：`gitee`。
-- 默认分支：`main`。
-- 首发标签：`v1.0.0`，使用附注标签。
-- 两个平台应指向同一提交；不使用会删除远端引用的 `git push --mirror`。
-- GitHub Actions 只在 GitHub 运行；同步到 Gitee 不代表已有 Gitee 流水线。
+发布请求应明确版本范围、目标仓库和是否公开二进制。确认这些授权后，完成构建与候选材料验证，再提交、推送和发布；不把制作完成当作已经远程发布。
+
+## 版本与更新说明
+
+1. 按实际变更选择 SemVer；本轮可靠性修复与体验完善采用 `1.0.0 → 1.0.1`。
+2. 同步修改 `VERSION`、`CFBundleShortVersionString` 和递增的 `CFBundleVersion`。
+3. 在 [更新日志](CHANGELOG.md) 写明日期、核心修复、体验变化、安装方式与验证范围。
+4. 将对应版本章节保存为 UTF-8 发行说明，供附注标签和 GitHub Release 使用同一份内容。
+5. 核对 [README](README.md) 的下载入口、当前版本和安装说明；历史版本说明保留当时事实。
 
 ## 发布前验证
 
@@ -19,58 +25,69 @@
 
 ```bash
 ./scripts/test.sh
-python3 scripts/check-docs.py --package
-BUILD_DIR="$PWD/build/release-validation" ARCHS=universal ./build.sh
-BUILD_DIR="$PWD/build/release-validation" ./build.sh --verify-only
+python3 -m unittest discover -s Tests -p 'test_release_packaging.py'
+python3 scripts/check-docs.py
+BUILD_DIR="$PWD/build/release-validation-v1.0.1" ARCHS=universal ./build.sh
+./build.sh --verify-only "build/release-validation-v1.0.1/歇一会儿.app"
+git diff --check
 ```
 
-原生界面 smoke 采用独立模拟数据，准确命令见[技术设计](docs/design.md#93-界面与真实系统验证)。它们会显示窗口，由维护者在合适时运行；不自动操作真实历史、用户偏好或系统休眠。
+原生界面检查使用内存或合成数据，命令见 [技术设计](docs/design.md#93-界面与真实系统验证)。按改动范围选择检查；不操作真实历史、登录项或系统休眠。
 
-确认版本、工作区和暂存内容后，再生成候选分发材料：
+必须为当前版本重新构建，不能将旧包重命名作为新版本。`--verify-only` 核对实际架构、部署目标和本地签名；最终打包还要比对应用版本、构建号、Bundle ID 与暂存源码清单。
+
+## 生成 DMG 与对应源码
+
+先审阅并暂存本次源码、测试、资源、版本和文档，确认所有候选都已进入 Git 索引，再运行：
 
 ```bash
 python3 scripts/prepare-release.py \
-  --app "build/release-validation/歇一会儿.app"
+  --app "build/release-validation-v1.0.1/歇一会儿.app" \
+  --dmg
 ```
 
-打包器要求所有公开候选已加入 Git 暂存区、没有未暂存的跟踪文件或未忽略文件；它从实际 Git tree 生成源码，不从整个工作目录随意压缩。临时缓存、构建目录、用户历史、凭据及两张未使用且未记录来源的候选照片不应进入源码。
+打包器要求没有未暂存的跟踪文件或未忽略文件，从实际 Git tree 导出源码，拒绝秘密文件、用户历史、签名凭据及未登记的候选照片。`--dmg` 为显式选项；省略时保持原有 ZIP 打包行为，CI 默认不创建或挂载磁盘映像。
 
-输出位于 `build/release/v1.0.0/`，包含：
+输出位于 `build/release/v1.0.1/`，包含：
 
-- 对应源码 ZIP；
-- macOS Universal ad-hoc 分发 ZIP，随附同一份源码、源码取得说明、CPAL 及照片来源；
-- SHA-256 校验清单和版本/源码 tree 的构建记录；
-- 另行生成的文档包与本版本发布说明。
+- `RestReminder-1.0.1-macos-universal.dmg`：应用及 Applications 拖拽安装入口，随附源码、安装说明、CPAL 和摄影来源；
+- `RestReminder-1.0.1-source.zip`：与实际暂存 Git tree 精确对应的完整源码；
+- `RestReminder-1.0.1-macos-universal-ad-hoc.zip`：同一应用和对应源码的 ZIP 分发包；
+- `release-manifest.json`：版本、构建号、源码 tree、部署目标、签名状态和附件哈希；
+- `SHA256SUMS`：发布材料 SHA-256 校验清单。
 
-分发包中的源码取得说明必须与实际版本一致。仓库尚未公开时，随包源码提供了直接取得方式；仓库确认后，发行说明再添加对应标签的实际链接。
+同版本输出目录已存在时，打包器拒绝覆盖。检查原有材料，使用独立目录开展额外验证；不要无检查地删除或替换已有发行物。
 
-## 确认版本与公开范围
+应用复制到独立 staging 后写入精确源码取得说明，再重新执行 ad-hoc 签名和全架构签名验证。源应用不被修改。DMG 中的应用、ZIP 中的应用、对应源码和 Git tree 必须相互一致。
 
-创建发行提交和标签前，审阅候选 README、更新日志、源码文件清单、校验结果及分发材料，确认：
+## 安装包验收
 
-1. 目标 GitHub / Gitee 仓库、所有者与可见性；
-2. 首发版本、提交署名及是否推送；
-3. 是否创建平台发行记录、是否提供 ad-hoc 二进制下载。
+1. 使用 `hdiutil verify` 校验 DMG，核对格式为压缩只读映像。
+2. 将 DMG 只读挂载到项目 build 下的独立检查目录，使用 `-nobrowse`，不启动应用。
+3. 检查应用、`Applications -> /Applications` 链接、源码 ZIP、许可、摄影来源和安装说明齐全。
+4. 对挂载应用核对版本/构建号、`arm64 + x86_64`、部署目标和全部切片签名；核对源码 ZIP 哈希及清单中的 Git tree。
+5. 将应用复制到另一个独立检查目录，验证复制后的签名和版本，模拟拖拽安装；不覆盖实际“应用程序”目录或用户当前版本。
+6. 完成后卸载本次挂载；上传前检查 `SHA256SUMS`。
 
-当前二进制没有 Developer ID 签名或公证，不能标成已通过全部目标系统与硬件验收的正式安装包。首发可选择仅公开源码，或将二进制明确标为试用构建。源码许可与品牌署名见 [LICENSE](LICENSE)。
+用户安装前先退出旧应用，打开 DMG 后将应用拖到 Applications，再从固定安装位置启动。当前构建没有 Developer ID 签名或 Apple 公证；首次启动可能被 macOS 拦截，应先核对来源与文件，再按“隐私与安全性”提示处理。不提供关闭系统整体安全保护的命令。
 
-## 标签与双平台同步
+## 提交、标签与双平台同步
 
-确认后，以实际批准的地址配置两个 remote。将批准的提交与附注标签推送到两个平台：
+候选验证通过后，核对暂存内容再创建提交和附注标签。标签说明使用相同版本的更新日志，不重写已有公开标签：
 
 ```bash
-git push -u origin main
-git push origin v1.0.0
-git push gitee main
-git push gitee v1.0.0
+git commit -m "chore: release v1.0.1"
+git tag -a v1.0.1 -F build/release-notes-v1.0.1.md
+git push origin main v1.0.1
+git push gitee main v1.0.1
 ```
 
-发布后读取两个远端的分支和标签，核对 `main` 提交及 `v1.0.0^{}` 指向一致。若某个平台失败，保留成功记录并解决该平台的问题；不强制覆盖已有历史或重写公开标签。
+发行提交的 Git tree 必须等于 `release-manifest.json` 中的 `source_git_tree`。推送后读取两个远端的 `main`、附注标签对象和 `v1.0.1^{}`，核对一致性；某个平台失败时保留成功状态并处理该平台，不强制覆盖历史。
 
-平台发行说明使用 [更新日志](CHANGELOG.md) 的 1.0.0 章节，并明确 CPAL、素材来源、部署目标、ad-hoc 状态与验证边界。两个平台上传同一批文件，比较 SHA-256；不要上传个人历史、偏好、编译缓存、签名私钥或真实使用截图。
+## GitHub Release 与发布后核对
 
-## 发布后
+远端标签存在后，通过 GitHub API、已认证 CLI 或网页创建该标签的 Release，使用同一份 UTF-8 发行说明，上传 DMG、源码 ZIP、应用 ZIP、构建清单和 SHA-256 文件。可先创建草稿，完成所有附件上传后再公开。
 
-- 根据平台真实执行结果更新流水线状态，不预先添加“测试通过”徽章。
-- 将 README 中的发布候选状态改为实际已发布状态，并补上真实下载和仓库链接。
-- 保留来源、品牌署名、许可及对未知平台状态的说明。
+公开后读取 Release、标签和附件列表，核对版本、目标提交、文件名、大小、SHA-256 与下载入口。GitHub Actions 的运行状态以对应发布提交的真实结果为准；本地测试不等于远程绿色运行，也不等于 Apple 公证或 Intel/旧系统实机验收。
+
+当前系统范围与隐私约定见 [README](README.md)，源码与素材许可见 [LICENSE](LICENSE) 和 [摄影来源](Resources/PHOTO-CREDITS.md)。

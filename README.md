@@ -33,9 +33,18 @@
 
 ## 快速开始
 
-首个公开源码版本为 **v1.0.0**，应用版本见 [VERSION](VERSION)，功能变化见[更新日志](CHANGELOG.md)。GitHub 主仓库与 Gitee 源码镜像均已公开，保留相同的版本标签。
+当前版本为 **v1.0.1**（构建号 2），应用版本见 [VERSION](VERSION)，核心变化见[更新日志](CHANGELOG.md)。GitHub 主仓库与 Gitee 源码镜像保留相同版本标签；首个公开源码版本为 v1.0.0。
 
-本次先发布源码，不提供二进制试用发行。可按下方步骤自行构建；本机构建产物为 ad-hoc 签名，尚未完成 Developer ID 签名或 Apple 公证。
+### 下载 DMG 安装
+
+从 **[GitHub Release v1.0.1](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)** 下载 `RestReminder-1.0.1-macos-universal.dmg`，可用同页 `SHA256SUMS` 核对文件。
+
+1. 安装或更新前，从菜单退出正在运行的“歇一会儿”。
+2. 打开 DMG，将“歇一会儿”拖到旁边的 **Applications（应用程序）** 入口。
+3. 从“应用程序”中的固定位置打开应用，再配置登录启动和音频权限；不要直接在磁盘映像里日常运行。
+4. 下载包目前为 **ad-hoc 签名，未完成 Developer ID 签名和 Apple 公证**。若 macOS 阻止首次打开，请先确认下载来源与校验值，再按“系统设置 → 隐私与安全性”中的系统提示处理；不需要关闭系统整体安全保护。
+
+DMG 随附精确对应的源码 ZIP、CPAL 许可、摄影来源和安装说明。也可按下方步骤自行构建。
 
 ### 系统要求
 
@@ -56,7 +65,7 @@
 | GitHub | 主仓库、问题反馈、Pull Request 与 CI | [xiongwhu/RestReminder](https://github.com/xiongwhu/RestReminder) |
 | Gitee | 同源源码镜像、备用克隆与下载入口 | [dukexls/RestReminder](https://gitee.com/dukexls/RestReminder) |
 
-镜像由维护者同步 `main` 和版本标签；一次导入不等于自动同步服务。需要固定版本时，可在克隆后执行 `git checkout v1.0.0`；日常更新使用 `main`，核对版本时以同名标签和提交 SHA 为准。问题反馈和贡献优先提交到 [GitHub Issues](https://github.com/xiongwhu/RestReminder/issues) 与主仓库 Pull Request。
+镜像由维护者同步 `main` 和版本标签；一次导入不等于自动同步服务。需要固定版本时，可在克隆后执行 `git checkout v1.0.1`；日常更新使用 `main`，核对版本时以同名标签和提交 SHA 为准。问题反馈和贡献优先提交到 [GitHub Issues](https://github.com/xiongwhu/RestReminder/issues) 与主仓库 Pull Request。
 
 ### 从源码构建
 
@@ -75,7 +84,9 @@ open "build/歇一会儿.app"
 
 构建脚本默认生成包含 Apple Silicon 与 Intel 的 Universal 应用，核对实际架构、最低系统版本及本地签名，无需打开 Xcode 工程。
 
-首次启动会显示设置。修改工作间隔和休息时长后自动保存，关闭窗口即可继续后台计时。需要日常使用或开启登录启动时，建议先把应用复制到“应用程序”等固定位置，再检查权限和登录项状态。
+首次启动会显示设置，并说明菜单栏入口、两种休息方式、三次提醒后的全屏升级及应急出口。修改工作间隔和休息时长后自动保存，关闭窗口即可继续后台计时。需要日常使用或开启登录启动时，建议先把应用复制到“应用程序”等固定位置，再检查权限和登录项状态。
+
+展开菜单可查看未完成提醒次数及下一次提示形式。暂停提醒时记录继续；重新计时保留未完成提醒和应急期限；手动会议保护持续到关闭。保存异常时，菜单会出现可打开记录详情的入口。
 
 也可以直接打开设置或记录窗口：
 
@@ -154,14 +165,14 @@ open "build/歇一会儿.app" --args --show-history
 ~/Library/Application Support/RestReminder/activity-history.json
 ```
 
-只保存时段起止、工作/休息类型与原因。常规保存带有检查点，异常退出可能丢失最近尚未保存的片段；应用未运行期间不补记。清理前可先导出备份，损坏档案会保留原文件并显示错误。
+只保存时段起止、工作/休息类型与原因。常规保存带有检查点，异常退出可能丢失最近尚未保存的片段；应用未运行期间不补记。自动保存失败后按 5、15、30、60 秒间隔重试，后续间隔保持 60 秒，成功后恢复正常保存；退出时另尝试一次保存。系统时间回拨期间，历史暂停新增归档，时间追平可信边界后重新采样，避免重叠记录。清理前可先导出备份，损坏档案会保留原文件并显示错误。
 
 ## 开发与文档
 
 项目使用 Swift、AppKit、CoreGraphics、CoreAudio 和 ServiceManagement，无第三方运行库或测试框架。
 
 ```bash
-# 运行十组隔离模型测试
+# 运行十一组隔离模型测试
 ./scripts/test.sh
 
 # 校验文档、截图与本地链接（Python 3 标准库，无第三方依赖）
@@ -224,4 +235,4 @@ CPAL-1.0 不是“只保留署名即可任意闭源分发”的许可。受覆�
 
 ### 发布状态
 
-本次公开源码与版本标签，暂不发布二进制试用包。目标设备验收、正式签名公证及未来下载包以项目后续发布说明为准；源码使用按本仓库 CPAL-1.0 条款执行。
+v1.0.1 提供源码、版本标签与 Universal DMG / ZIP 下载，发行内容见 [GitHub Release](https://github.com/xiongwhu/RestReminder/releases/tag/v1.0.1)。二进制为 ad-hoc 签名，目标设备验收与正式签名公证的范围见本页系统要求及发行说明；源码使用按本仓库 CPAL-1.0 条款执行。

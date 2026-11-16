@@ -85,13 +85,14 @@ CoreAudio 回调位于音频线程；AppKit、规则编排、历史查看等在�
 
 ### 1.2 源码职责
 
-应用显式编译以下 **15 个 Swift 源文件**；图标生成器和测试程序不计入应用源码列表。
+应用显式编译以下 **16 个 Swift 源文件**；图标生成器和测试程序不计入应用源码列表。
 
 | 文件 | 主要职责 |
 | --- | --- |
 | [应用入口](../Sources/main.swift) | 启动锁、AppDelegate、每秒 tick、菜单/设置、登录项、建议索引及通知编排 |
 | [计时状态](../Sources/ActivitySession.swift) | 工作起点、普通延后、休息完成、返回反馈；包含 SystemRestState |
 | [主动休息](../Sources/VoluntaryRest.swift) | 明确开始/结束与单调正计时，不依赖键鼠空闲，不恢复退出期间 |
+| [时间配置](../Sources/ReminderSettings.swift) | 偏好与编辑共用类型/有限值/范围校验，安全时间格式化 |
 | [升级策略](../Sources/RestEscalation.swift) | 正式提醒计数、加强状态、连续空闲、系统离开及应急期限 |
 | [音频检测](../Sources/AudioPlaybackMonitor.swift) | Tap、私有聚合设备、信号强度、新鲜度及音频结束缓冲 |
 | [历史模型](../Sources/ActivityHistory.swift) | 原始分段、JSON、日/周汇总、纯展示明细分组、CSV、删除预览、原子提交及保留策略 |
@@ -349,7 +350,9 @@ struct ActivityRecord: Codable {
 
 ### 7.3 保存与失败
 
-状态变化、系统离开/返回、退出及约 30 秒检查点会原子重写整份归档。异常退出可能丢失最近尚未保存的部分；写入失败会报告并在后续保存机会重试。
+状态变化、系统离开/返回、退出及约 30 秒检查点会原子重写整份归档。异常退出可能丢失最近尚未保存的部分。自动保存失败时，以可注入的单调时间按 5/15/30/60 秒退避，之后保持 60 秒；检查点及转段、挂起、恢复共用同一重试门限，成功后复位。失败期间内存继续记录，正常退出另执行一次最终保存尝试。显式删除/保留变更仍直接执行原子写入，失败保留原数据。
+
+系统返回或主动结束时，先解除挂起，再检查墙钟边界。若恢复日期早于最后采样，旧片段关闭在最后可信时间，清除观察起点；墙钟追平之前暂停新增归档，之后从新采样开始，既不重叠也不补造回拨期间的记录。
 
 加载要求版本正确、时间有限、`end > start`，且按顺序不重叠。JSON 损坏、未知类型、版本不支持或区间无效会使整份加载失败：保留原文件，本次运行只记内存，界面显示错误；不会自动修复或覆盖。
 
@@ -431,7 +434,13 @@ v1.2 已加入 CSV、删除/保留预览和每用户单实例锁，见下文。�
 
 macOS 13+ 通过可用性检查后使用 `SMAppService.mainApp.status/register()/unregister()`，并由 `openSystemSettingsLoginItems()` 打开系统入口。`requiresApproval` 显示为勾选并明确等待批准；错误回读真实状态，设置可见且应用重新激活时刷新。macOS 12 禁用应用内一键注册并说明系统限制，提供手动打开登录项的系统入口，不把本地布尔值冒充成功注册。
 
-首次启动或使用 `--show-settings` 参数时打开设置。正常已使用过的应用启动保持静默，这同时覆盖手动启动和登录自启动，不是依靠专门的登录启动参数识别。
+首次启动或使用 `--show-settings` 参数时打开设置，说明菜单栏入口、自动倒计时与主动正计时、三次普通提醒后的全屏升级及应急出口。正常已使用过的应用启动保持静默，这同时覆盖手动启动和登录自启动，不是依靠专门的登录启动参数识别。
+
+时间配置统一通过 ReminderSettings 校验：工作 0.1–240 分钟，休息 0.1–60 分钟；加载时修复无效值，后续读取也检查类型、有限值和范围，界面编辑复用同一规则。数值布尔和字符串不作为时长接受，合法值保留。时间显示转换先验证或限界再转为整数。
+
+菜单显示累计未完成提醒和后续提示形式；存在进行中全屏义务时显示待完成状态。暂停和手动保护注明记录继续/直到关闭，重新计时说明不会清除次数与应急期限。历史保存错误有可点击的菜单入口，打开现有记录窗口。
+
+普通自动提醒延后或中止后，在主队列完成模态收尾，再检查本应用仍为前台、原应用仍存活、系统活动且无接续休息页/新提醒/用户新开界面，符合条件才恢复原应用；用户主动切换应用时不抢回焦点。
 
 ### 8.3 轻提示与全屏页
 
@@ -524,8 +533,13 @@ macOS 13+ 通过可用性检查后使用 `SMAppService.mainApp.status/register()
 | advice：[建议](../Tests/RestAdviceTests.swift) | 六条轮换、索引恢复、独立预览、非法索引及文案长度 | 不代表实际做了这些活动 |
 | instance：[实例锁](../Tests/SingleInstanceTests.swift) | 真实 exec 子进程争锁、正常释放、仅自身测试子进程 SIGKILL 后恢复、独立锁、稳定 inode、0600、IO/symlink 错误 | 验证唯一临时根；不调用生产默认路径，不查询或终止真实应用 |
 | voluntary：[主动休息](../Tests/VoluntaryRestTests.swift) | 数值时钟驱动的正计时、重复开始/明确结束/超阈值不自动退出、无效值、显式历史区间与锁屏重叠、结束边界及退出重载不补记 | 模拟时钟＋内存/临时归档；不运行 AppDelegate、菜单绑定、真实锁屏/睡眠或实际单调时钟 |
+| settings：[配置](../Tests/ReminderSettingsTests.swift) | 独立偏好域、错误类型/布尔/非有限值/范围、默认恢复、合法值保留、编辑共用校验及安全时间转换 | 不读取真实偏好，不启动应用；结束清理自身随机测试域 |
+
+history 另覆盖系统返回和主动结束期间的墙钟回拨恢复，注入单调时钟验证保存失败退避、转段共用限频、恢复后完整保存、显式删除失败回滚和退出最终尝试。
 
 2026-11-09 已有十组综合通过记录，本地为 arm64、macOS 12 部署目标、macOS 27 执行主机；明细合并增量另通过 history 与 voluntary 回归。这是向后部署验证，不是 macOS 12 系统验收。默认模型套件不编译应用入口或原生窗口，不能单独证明菜单到全屏的完整交互。Universal 两切片已完成编译、链接、部署元数据与 ad-hoc 签名检查，Intel 未实机运行。本文档更新核对既有证据，不声称重新执行了以上测试。
+
+2026-11-15 第一批优化本地验证：十一组隔离套件通过；增加回拨中到期重试覆盖后，history/voluntary 增量再次通过。真实 AppDelegate 设置检查、原有日/周历史窗口检查及两种全屏组件检查通过，均使用隔离偏好/内存或合成档案。独立源码与 UX 审查发现的回拨重试、提醒重新激活响应和小屏校验反馈问题已修正并核对。最终 Universal 构建及全部切片 ad-hoc 签名校验通过，实际最低仍为 arm64/macOS 12 与 x86_64/macOS 13。缓存预览不可用，完整视觉对比与跨应用焦点切换仍待实机验收。
 
 ### 9.2 可复现的模型测试命令
 
@@ -536,7 +550,7 @@ macOS 13+ 通过可用性检查后使用 `SMAppService.mainApp.status/register()
 ./scripts/test.sh history advice instance
 ```
 
-默认十组，无第三方测试依赖，不启动应用、真实音频、登录项或全屏页面。音频和会议测试已把[连续时钟兼容层](../Sources/RestContinuousClock.swift)列为依赖，避免沿用漏文件的旧手工命令。`SWIFTC`、`SDKROOT`、`DEVELOPER_DIR` 与构建入口一致；`TEST_DEPLOYMENT_TARGET` 可要求特定本机部署目标，`BUILD_DIR` 可隔离产物。
+默认十一组，无第三方测试依赖，不启动应用、真实音频、登录项或全屏页面。音频和会议测试已把[连续时钟兼容层](../Sources/RestContinuousClock.swift)列为依赖，避免沿用漏文件的旧手工命令。`SWIFTC`、`SDKROOT`、`DEVELOPER_DIR` 与构建入口一致；`TEST_DEPLOYMENT_TARGET` 可要求特定本机部署目标，`BUILD_DIR` 可隔离产物。
 
 ### 9.3 界面与真实系统验证
 
@@ -588,11 +602,22 @@ mkdir -p build/gui-module-cache
 
 该组件检查不等同于真实浏览器跳转或完整 VoiceOver 验收。
 
+新增 [AppDelegate 设置检查](../Tests/AppDelegateSmoke.swift)使用实际设置构建代码，注入随机独立偏好域与内存历史。编译时关闭生产入口，不把测试控制器注册为应用代理，因此不取得生产锁、不启动活动采样/音频捕获或登录项注册。覆盖两种休息规则说明、合法配置保留、460×480 明暗外观及维护展开/收起后的滚动可达性；在小窗口顶部输入无效时长，验证未保存提示可见且旧偏好保留。测试退出前解除自身窗口/字段代理，再清理测试域，避免退出通知在清理后重新保存。生成的独立 view-cache 预览仅为采集尝试：本次环境缓存图像无法清晰呈现背景与文字，不作为视觉一致性通过证据。几何/可达性断言不等同于视觉验收，也不验证跨应用焦点切换或完整提醒到全屏流程。
+
+```bash
+"$RR_SWIFTC" -sdk "$RR_SDK" -target "$RR_ARCH-apple-macosx13.0" \
+  -module-cache-path build/gui-module-cache -D REMINDER_UI_SMOKE \
+  Sources/*.swift Tests/AppDelegateSmoke.swift \
+  -framework AppKit -framework AVFoundation -framework CoreGraphics \
+  -framework CoreAudio -framework ServiceManagement -o build/app-delegate-smoke
+./build/app-delegate-smoke
+```
+
 真实授权、设备切换、真实会议/镜像/放映、锁屏/合盖/Touch ID、登录批准与实际重启、旧 macOS、Intel、多显示器/Space 和全面 VoiceOver 仍需对应环境验收。当前也没有长期续航基准。
 
 ### 9.4 GitHub Actions 与证据状态
 
-[工作流](../.github/workflows/tests.yml)使用 `macos-15`、官方 checkout/upload-artifact 和 runner 已选定的 Xcode/SDK。顺序是 shell/plist/文档检查 → 十组本机测试 → Universal 构建 → 架构/最低系统/全部切片签名验证 → 对应源码与应用打包校验。首发仅上传验证报告、manifest 和校验信息，不上传应用 ZIP；仓库权限为 contents:read，不创建 release，不调用实时捕获、设备元数据或 GUI smoke。
+[工作流](../.github/workflows/tests.yml)使用 `macos-15`、官方 checkout/upload-artifact 和 runner 已选定的 Xcode/SDK。顺序是 shell/plist/文档检查 → 十一组本机测试 → Universal 构建 → 架构/最低系统/全部切片签名验证 → 对应源码与应用打包校验。首发仅上传验证报告、manifest 和校验信息，不上传应用 ZIP；仓库权限为 contents:read，不创建 release，不调用实时捕获、设备元数据或 GUI smoke。
 
 首次上传前的本地基线已通过十组测试、Universal 编译/签名、分发 ZIP 完整性、文档与指定 GUI smoke。本地验证不等同于远程绿色运行；最新远程状态见 [GitHub Actions](https://github.com/xiongwhu/RestReminder/actions)。CI 验证报告也不等同于 Developer ID、公证或旧系统/Intel 实机验收。
 
@@ -600,7 +625,7 @@ mkdir -p build/gui-module-cache
 
 ### 10.1 当前构建
 
-[构建脚本](../build.sh)显式列出 15 个应用源文件，分别按架构执行 `-O -whole-module-optimization -emit-object` 及链接，使用 AppKit、AVFoundation、CoreGraphics、CoreAudio、ServiceManagement。每个架构独立对象和可执行文件，随后用 lipo 合并；逐一检查所需架构和二进制最低版本，复制清单、摄影、来源说明、应用图标，再本地 ad-hoc 签名并验证全部切片。没有 SwiftPM 或第三方构建依赖。
+[构建脚本](../build.sh)显式列出 16 个应用源文件，分别按架构执行 `-O -whole-module-optimization -emit-object` 及链接，使用 AppKit、AVFoundation、CoreGraphics、CoreAudio、ServiceManagement。每个架构独立对象和可执行文件，随后用 lipo 合并；逐一检查所需架构和二进制最低版本，复制清单、摄影、来源说明、应用图标，再本地 ad-hoc 签名并验证全部切片。没有 SwiftPM 或第三方构建依赖。
 
 ```bash
 ./scripts/test.sh
@@ -629,7 +654,9 @@ open "build/歇一会儿.app" --args --show-history
 | 登录项/设备发现 | `SMAppService` 由 macOS 13 guard 保护，12 使用手动入口；较新的摄像头类型在可用分支内 |
 | 签名与归档 | 本地 ad-hoc；全部架构签名、清单最低版本及 ditto ZIP 完整性通过 |
 | 实际运行平台 | 本地 Apple Silicon/macOS 27；Intel 仅交叉编译，12/13 运行和真实 Intel 未验收 |
-| 正式发行 | 未完成 Developer ID、公证或正式发布；CI 工件不构成发行声明 |
+| 正式发行 | 此表记录 v1.0.0 首发时未完成的 Developer ID/公证及下载发布；CI 工件本身不构成发行声明 |
+
+2026-11-16 的 v1.0.1 发布更新应用版本为 1.0.1、构建号为 2，新增显式 `--dmg` 打包，将应用、Applications 链接、对应源码和许可置于压缩只读映像。当前发布的架构/部署目标与签名状态以发行构建和 manifest 为准；旧系统与 Intel 实机验收边界沿用上表。
 
 已安装 CLT SDK 26.5、27.0 均广告两种架构与 macOS 12 目标。实际 Intel/12 链接仍因 CLT 的 `libswiftCompatibility56.a` 缺少 x86_64 切片而失败，SDK 切换不能修复；Intel/13 不再要求该兼容符号，完整源码链接成功。保留了所有运行时兼容选项，没有用空桩或关闭兼容机制强行通过。完整工具链在其他环境可能让 Intel/12 通过，脚本会重新探测并写入实际最低值。
 
@@ -716,7 +743,7 @@ mkdir -p build/icon-module-cache
 - [ ] 若提供下载包，完成签名、公证及安装包检查；若先发源码，明确自编译条件。
 - [ ] 只提交源码、测试、必要素材与文档，不提交真实活动历史、构建缓存或签名凭据。
 
-本地已落实 CPAL-1.0 许可与品牌署名；尚未创建远程仓库、提交代码或发布正式下载包。
+v1.0.0 已完成 GitHub/Gitee 源码首发；v1.0.1 按发布请求提供 Universal DMG / ZIP 与对应源码，应用构建号为 2。发布材料包含精确 Git tree、许可与摄影来源；当前仍为 ad-hoc 签名，Developer ID、公证及目标设备验收继续单独跟进。打包、挂载检查和双平台推送步骤见 [发布流程](../RELEASING.md)。
 
 ## 12. 关键设计决策及替代方案
 
@@ -750,9 +777,9 @@ mkdir -p build/icon-module-cache
 | L-05 系统通知 | 非公开字符串通知可能丢失或因系统变化不同；无锁态纠偏 | 补真实系统回归，必要时增加可恢复状态查询 |
 | L-06 历史规模与编辑 | 已有可选保留和单实例，但归档仍整份读取/重写；切分可改变派生休息分类 | 测量长期成本，保留编辑说明；单实例 advisory 锁不阻止外部手工改文件 |
 | L-07 时间显示 | 回拨重复小时未显示时区 | 增补区间显示与测试，不泛称所有时间异常都已解决 |
-| L-08 偏好校验 | UI 校验有效，但外部修改偏好加载后未再次校验 | 后续补配置恢复边界，避免异常值进入规则 |
+| L-08 偏好校验 | 已补加载、读取、编辑共用校验及安全显示转换 | 隔离偏好测试覆盖异常类型、数值和合法边界；真实系统偏好损坏仍按可读值降级 |
 | L-09 平台体验 | 窗口层级、所有 Space 组合、VoiceOver 与登录启动尚未完整人工验收 | 保留系统回归清单，准确描述实测范围 |
-| L-10 发布工程 | CPAL-1.0 与双平台源码首发已落实；首发 CI 已通过，当前不发布二进制 | 后续若分发应用，另行完成签名公证和目标设备验收 |
+| L-10 发布工程 | v1.0.1 提供随附源码的 Universal DMG / ZIP；当前为 ad-hoc 签名 | Developer ID、公证和旧系统/Intel 实机验收仍未完成；CI 不自动创建 DMG 或 Release |
 
 这些是当前实现事实或待验证事项，不属于本轮文档任务中已经修复的新功能。
 
@@ -762,7 +789,7 @@ mkdir -p build/icon-module-cache
 | --- | --- | --- |
 | 到期前提前预告 | 待用户确认 | 没有新增提前弹窗、预告倒计时或相关开关 |
 | 自定义提醒次数、普通/应急延后 | 仅讨论，未增加策略控件 | 正式提醒上限 3 次，普通及应急延后均为固定 5 分钟 |
-| 公开源码与二进制发行 | GitHub/Gitee 源码 v1.0.0 已公开；二进制暂不发行 | CPAL-1.0、分支/标签一致性与首发远程 CI 已核对；Developer ID、公证及旧系统/Intel 实机验收仍未完成 |
+| 公开源码与二进制发行 | v1.0.0 源码首发；v1.0.1 增加 Universal DMG / ZIP 下载 | 对应源码及许可随包，精确版本/tree/哈希可核对；Developer ID、公证及旧系统/Intel 实机验收仍未完成 |
 
 ### 13.2 本次文档修订范围
 

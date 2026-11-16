@@ -83,6 +83,23 @@ private final class MemoryHistoryPreferences: ActivityHistoryPreferences {
         gap.sample(at: date(104), uptime: 106, idle: 0, restThreshold: 10)
         expect(gap.day(base, now: date(105), calendar: calendar).workSeconds == 10, "Clock rollback creates no overlap")
 
+        for reason in ["系统休眠 / 会话离开", "主动休息"] {
+            let rollback = ActivityHistory(storageURL: nil)
+            rollback.sample(at: date(0), uptime: 0, idle: 0, restThreshold: 10)
+            rollback.sample(at: date(5), uptime: 5, idle: 0, restThreshold: 10)
+            rollback.suspend(at: date(5), reason: reason)
+            rollback.sample(at: date(10), uptime: 10, idle: 0, restThreshold: 10)
+            rollback.resume(at: date(-50))
+            rollback.sample(at: date(-49), uptime: 20, idle: 0, restThreshold: 10)
+            rollback.sample(at: date(11), uptime: 31, idle: 0, restThreshold: 10)
+            rollback.sample(at: date(16), uptime: 36, idle: 0, restThreshold: 10)
+            let recovered = rollback.day(base, now: date(16), calendar: calendar)
+            expect(recovered.workSeconds == 10 && recovered.restSeconds == 5,
+                   "Returning during clock rollback releases \(reason) and resumes work after the trusted boundary")
+            expect(recovered.intervals.count == 3 && recovered.intervals.last?.start == date(11),
+                   "Rollback recovery neither overlaps old records nor invents the unobserved gap")
+        }
+
         let midnight = calendar.startOfDay(for: base).addingTimeInterval(86400)
         let crossDay = ActivityHistory(storageURL: nil)
         crossDay.suspend(at: midnight.addingTimeInterval(-60))
@@ -548,6 +565,73 @@ private final class MemoryHistoryPreferences: ActivityHistoryPreferences {
         liveFailure.sample(at: date(105), uptime: 105, idle: 105, restThreshold: 10)
         expect(liveFailure.day(base, now: date(105), calendar: calendar).ongoingStart == base,
                "Failed live deletion cannot advance the recording floor")
+        var retryTime: TimeInterval = 0
+        var automaticAttempts: [TimeInterval] = []
+        var rejectAutomaticWrite = true
+        let retryURL = directory.appendingPathComponent("automatic-retry.json")
+        let retryHistory = ActivityHistory(storageURL: retryURL, archiveWriter: { data, url in
+            automaticAttempts.append(retryTime)
+            if rejectAutomaticWrite { throw CocoaError(.fileWriteNoPermission) }
+            try data.write(to: url, options: .atomic)
+        }, retryClock: { retryTime })
+        for second in 0...169 {
+            retryTime = Double(second)
+            // Transitions also try to save, but may not bypass the same retry gate.
+            if second % 10 == 1 { retryHistory.suspend(at: date(retryTime)) }
+            if second % 10 == 2 { retryHistory.resume(at: date(retryTime)) }
+            retryHistory.sample(at: date(retryTime), uptime: retryTime, idle: 0, restThreshold: 10)
+        }
+        expect(automaticAttempts == [0, 5, 20, 50, 110] && retryHistory.persistenceError != nil,
+               "Failed checkpoints and transitions share 5/15/30/60-second monotonic retry delays")
+        retryTime = 170
+        rejectAutomaticWrite = false
+        retryHistory.sample(at: date(170), uptime: 170, idle: 0, restThreshold: 10)
+        let retryReloaded = ActivityHistory(storageURL: retryURL)
+        expect(automaticAttempts == [0, 5, 20, 50, 110, 170] && retryHistory.persistenceError == nil &&
+               retryReloaded.day(base, now: date(170), calendar: calendar).intervals ==
+               retryHistory.day(base, now: date(170), calendar: calendar).intervals,
+               "A successful retry saves every accumulated in-memory span as a reloadable v1 snapshot")
+        rejectAutomaticWrite = true
+        for second in 171...205 {
+            retryTime = Double(second)
+            retryHistory.sample(at: date(retryTime), uptime: retryTime, idle: 0, restThreshold: 10)
+        }
+        expect(Array(automaticAttempts.suffix(2)) == [200, 205],
+               "Success resets the backoff so a new failure starts with a five-second delay")
+        let beforeExplicitFailure = retryHistory.day(base, now: date(205), calendar: calendar).intervals
+        retryTime = 206
+        let duringBackoff = try retryHistory.previewDeletion(in: DateInterval(start: date(0), end: date(5)), at: date(205))
+        do { try retryHistory.delete(duringBackoff); fatalError("Explicit deletion must attempt its atomic write") } catch { }
+        expect(automaticAttempts.last == 206 &&
+               retryHistory.day(base, now: date(205), calendar: calendar).intervals == beforeExplicitFailure,
+               "Explicit deletion bypasses automatic retry delay and still rolls back on failure")
+        retryTime = 207
+        let attemptsBeforeQuit = automaticAttempts.count
+        retryHistory.finish(at: date(207))
+        expect(automaticAttempts.count == attemptsBeforeQuit + 1 && automaticAttempts.last == 207,
+               "Quit makes one final save attempt even during automatic backoff")
+
+        // Wall-clock jumps cannot bypass or extend a monotonic retry deadline.
+        var jumpClock: TimeInterval = 0
+        var jumpAttempts = 0
+        let jumpingWriter = ActivityHistory(storageURL: directory.appendingPathComponent("clock-retry.json"),
+            archiveWriter: { _, _ in jumpAttempts += 1; throw CocoaError(.fileWriteNoPermission) },
+            retryClock: { jumpClock })
+        jumpingWriter.sample(at: date(0), uptime: 0, idle: 0, restThreshold: 10)
+        jumpClock = 1
+        jumpingWriter.sample(at: date(86400), uptime: 1, idle: 0, restThreshold: 10)
+        expect(jumpAttempts == 1, "A wall-clock jump cannot trigger an early retry")
+        jumpClock = 5
+        jumpingWriter.sample(at: date(86401), uptime: 5, idle: 0, restThreshold: 10)
+        expect(jumpAttempts == 2, "A monotonic retry deadline remains effective after a wall-clock jump")
+        jumpClock = 20
+        jumpingWriter.sample(at: date(-100), uptime: 20, idle: 0, restThreshold: 10)
+        expect(jumpAttempts == 3,
+               "Clock rollback freezes new observations without delaying a pending monotonic storage retry")
+        jumpClock = 21
+        jumpingWriter.sample(at: date(-99), uptime: 21, idle: 0, restThreshold: 10)
+        expect(jumpAttempts == 3, "Repeated rollback samples still respect the retry gate")
+
         let stale = ActivityHistory(storageURL: nil)
         stale.sample(at: date(0), uptime: 0, idle: 0, restThreshold: 10)
         stale.sample(at: date(5), uptime: 5, idle: 0, restThreshold: 10)
@@ -614,6 +698,6 @@ private final class MemoryHistoryPreferences: ActivityHistoryPreferences {
         do { try corruptRetention.prune(at: retentionNow, calendar: calendar); fatalError("Corrupt original must block pruning") }
         catch ActivityHistoryError.protectedArchive { }
         expect(tryData(corruptFile) == corruptData, "Corrupt file remains byte-for-byte intact after attempted cleanup")
-        print("PASS: existing history regressions; detail grouping/update gaps/boundaries/barriers/fractions/reasons/ongoing/calendar with raw statistics/CSV/archives unchanged; Monday weeks/DST/partial/future; CSV clipping/Unicode/quotes/newlines/formula protection/BOM/timezones; frozen previews/splits/clear-all/live continuation; transactional save rollback; opt-in retention/preferences/calendar cutoff/v1/corrupt protection")
+        print("PASS: existing history regressions; detail grouping/update gaps/boundaries/barriers/fractions/reasons/ongoing/calendar with raw statistics/CSV/archives unchanged; Monday weeks/DST/partial/future; CSV clipping/Unicode/quotes/newlines/formula protection/BOM/timezones; frozen previews/splits/clear-all/live continuation; transactional save rollback; opt-in retention/preferences/calendar cutoff/v1/corrupt protection; rollback return recovery; monotonic retry backoff/transitions/recovery/reset/explicit deletion/final save")
     }
 }

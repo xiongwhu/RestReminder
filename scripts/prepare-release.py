@@ -36,8 +36,15 @@ class ReleaseError(Exception):
     pass
 
 
-def run(arguments):
-    process = subprocess.run(arguments, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def run_process(arguments, *, timeout=120):
+    try:
+        return subprocess.run(arguments, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise ReleaseError(f"{Path(arguments[0]).name} timed out after {timeout} seconds; inspect retained staging before retrying") from error
+
+
+def run(arguments, *, timeout=120):
+    process = run_process(arguments, timeout=timeout)
     if process.returncode:
         # Do not echo tool output, environment values, source blobs or local absolute paths.
         raise ReleaseError(f"{Path(arguments[0]).name} failed (exit {process.returncode}); check prerequisites and staged inputs")
@@ -97,19 +104,82 @@ def verify_plist(path, expected, version):
     return actual
 
 
+def require_tools(*, dmg=False):
+    tools = ["/usr/bin/ditto", "/usr/bin/codesign"]
+    if dmg:
+        tools.append("/usr/bin/hdiutil")
+    for tool in tools:
+        if not Path(tool).is_file():
+            raise ReleaseError(f"Required macOS tool is unavailable: {Path(tool).name}")
+
+
+def dmg_instructions(version, tree, source_name, app_name):
+    return (
+        f"歇一会儿 RestReminder {version} — 安装与源码说明\n\n"
+        "1. 安装前，请从菜单栏退出正在运行的旧版“歇一会儿”。\n"
+        f"2. 将“{app_name}”拖到本磁盘窗口的 Applications 链接，安装到“应用程序”。\n"
+        "3. 从“应用程序”打开应用，按需配置登录启动和音频隐私权限。\n"
+        "4. 此包只有本地 ad-hoc 签名，未使用 Developer ID，也未完成 Apple 公证。\n"
+        "   首次打开若被系统阻止，请先核对下载来源与 SHA256SUMS。确认可信后，\n"
+        "   可到“系统设置 → 隐私与安全性”查看针对本应用的拦截提示，并按系统提供的\n"
+        "   “仍要打开”等选项确认；不同 macOS 版本的按钮与可用步骤可能不同。\n"
+        "   若没有允许选项，请保留系统保护，参考随附源码自行构建或等待正式签名版本。\n"
+        "   请勿关闭全局 Gatekeeper 或全局系统安全保护。\n\n"
+        f"应用版本：{version}\n精确 Git source tree：{tree}\n"
+        f"对应源码：{source_name}\n"
+        f"构建方式：解压源码，进入 RestReminder-{version}，按 README.md 运行 ./build.sh。\n"
+        "本应用与对应源码一同提供；请保留 SOURCE-CODE.txt、LICENSE 与 PHOTO-CREDITS.md。\n"
+        "项目源码适用 CPAL-1.0，第三方照片继续遵守各自许可；兼容性和验证范围见源码文档。\n"
+    )
+
+
+def create_dmg(distribution, staging, destination, version, tree, source_name, app_name):
+    if destination.exists() or destination.is_symlink():
+        raise ReleaseError("DMG output already exists; inspect existing artifacts before another run")
+    # A second copy keeps the installation link and DMG-specific instructions out of the ZIP.
+    dmg_root = staging / "dmg-root"
+    if dmg_root.exists() or dmg_root.is_symlink():
+        raise ReleaseError("DMG staging directory already exists; inspect retained staging before retrying")
+    run(["/usr/bin/ditto", str(distribution), str(dmg_root)])
+    applications = dmg_root / "Applications"
+    if applications.exists() or applications.is_symlink():
+        raise ReleaseError("DMG staging already contains an Applications entry")
+    applications.symlink_to("/Applications", target_is_directory=True)
+    (dmg_root / "RELEASE-INSTRUCTIONS.txt").write_text(
+        dmg_instructions(version, tree, source_name, app_name), encoding="utf-8")
+    # HFS+ keeps the installer readable on the supported macOS versions and
+    # avoids depending on a newer host's default disk-image filesystem.
+    run(["/usr/bin/hdiutil", "create", "-srcfolder", str(dmg_root),
+         "-volname", f"RestReminder {version}", "-fs", "HFS+", "-format", "UDZO", str(destination)], timeout=600)
+    run(["/usr/bin/hdiutil", "verify", str(destination)], timeout=300)
+    information = plistlib.loads(run(["/usr/bin/hdiutil", "imageinfo", "-plist", str(destination)]))
+    if not isinstance(information, dict):
+        raise ReleaseError("DMG image information must be a property-list dictionary")
+    properties = information.get("Properties", {})
+    if (information.get("Format") != "UDZO" or not isinstance(properties, dict)
+            or properties.get("Compressed") is not True):
+        raise ReleaseError("DMG must be a compressed read-only UDZO image")
+    # UDZO is intrinsically read-only. Current hdiutil omits a writable property;
+    # reject an explicit conflicting property when an older host reports one.
+    if any(container[key] is not False for container in (information, properties)
+           for key in ("Writeable", "Writable") if key in container):
+        raise ReleaseError("DMG must be a compressed read-only UDZO image")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, epilog="First run build.sh --verify-only on the original isolated app. This helper checks the copied plist/signature; it does not build, launch, notarize, or verify binary architecture/minimum targets.")
     parser.add_argument("--app", type=Path, required=True, help="Existing isolated Universal .app, already checked with build.sh --verify-only")
+    parser.add_argument("--dmg", action="store_true", help="Also create and verify a compressed read-only DMG with a drag-to-Applications link")
     args = parser.parse_args()
     try:
-        prepare(args.app)
+        prepare(args.app, dmg=args.dmg)
     except (ReleaseError, OSError, ValueError, plistlib.InvalidFileException, zipfile.BadZipFile) as error:
         if isinstance(error, ReleaseError):
             parser.exit(1, f"error: {error}\n")
         parser.exit(1, f"error: packaging input or output failure ({type(error).__name__}); no cleanup performed\n")
 
 
-def prepare(app_argument):
+def prepare(app_argument, *, dmg=False):
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
         raise ReleaseError("VERSION must contain a numeric major.minor.patch version")
@@ -121,8 +191,7 @@ def prepare(app_argument):
     if any(entry and entry.split(b"\t", 1)[0].split()[-1] != b"0" for entry in index.split(b"\0")):
         raise ReleaseError("Resolve unmerged index entries before packaging")
     entries = parse_entries(index)
-    dirty = subprocess.run(["git", "diff", "--quiet", "--ignore-submodules=none"], cwd=ROOT,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    dirty = run_process(["git", "diff", "--quiet", "--ignore-submodules=none"])
     if dirty.returncode:
         raise ReleaseError("Unstaged tracked changes or Git comparison failure; stage the reviewed files first")
     if git("ls-files", "--others", "--exclude-standard", "-z"):
@@ -140,15 +209,13 @@ def prepare(app_argument):
     if not app.is_dir() or app.suffix != ".app":
         raise ReleaseError("--app must identify an existing isolated .app directory")
     verify_plist(app / "Contents/Info.plist", expected, version)
-    for tool in ("/usr/bin/ditto", "/usr/bin/codesign"):
-        if not Path(tool).is_file():
-            raise ReleaseError(f"Required macOS tool is unavailable: {Path(tool).name}")
+    require_tools(dmg=dmg)
     release_root = ROOT / "build/release"
     if not release_root.resolve().is_relative_to(ROOT / "build"):
         raise ReleaseError("Release output escapes the project build directory")
     release_root.mkdir(parents=True, exist_ok=True)
     output = release_root / f"v{version}"
-    if output.exists():
+    if output.exists() or output.is_symlink():
         raise ReleaseError("Version output directory already exists; inspect existing artifacts before another run")
     output.mkdir()
     staging = Path(tempfile.mkdtemp(prefix=f".staging-v{version}-", dir=release_root))
@@ -199,7 +266,7 @@ def prepare(app_argument):
         encoding="utf-8")
     run(["/usr/bin/codesign", "--force", "--sign", "-", str(staged_app)])
     run(["/usr/bin/codesign", "--verify", "--all-architectures", "--deep", "--strict", str(staged_app)])
-    signature = subprocess.run(["/usr/bin/codesign", "--display", "--verbose=4", str(staged_app)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    signature = run_process(["/usr/bin/codesign", "--display", "--verbose=4", str(staged_app)])
     if signature.returncode or b"Signature=adhoc" not in signature.stdout + signature.stderr:
         raise ReleaseError("Copied app must have a valid ad-hoc signature")
     staged_plist = verify_plist(staged_app / "Contents/Info.plist", expected, version)
@@ -207,7 +274,12 @@ def prepare(app_argument):
     with zipfile.ZipFile(binary_zip) as archive:
         if archive.testzip() is not None:
             raise ReleaseError("Application distribution ZIP failed integrity checking")
-    artifacts = {name: {"sha256": digest(output / name), "bytes": (output / name).stat().st_size} for name in (source_name, binary_name)}
+    artifact_paths = [source_zip, binary_zip]
+    if dmg:
+        disk_image = output / f"RestReminder-{version}-macos-universal.dmg"
+        create_dmg(distribution, staging, disk_image, version, tree, source_name, app.name)
+        artifact_paths.append(disk_image)
+    artifacts = {path.name: {"sha256": digest(path), "bytes": path.stat().st_size} for path in artifact_paths}
     manifest = {
         "version": version, "app_build": str(staged_plist["CFBundleVersion"]),
         "source_git_tree": tree, "source_file_count": len(entries), "source_prefix": prefix,
@@ -216,11 +288,14 @@ def prepare(app_argument):
         "validation": "Copied plist and all-architecture signature checked; original binary architectures/minimum targets require build.sh --verify-only before packaging.",
         "created_utc": datetime.now(timezone.utc).isoformat(), "artifacts": artifacts,
     }
+    if dmg:
+        manifest["disk_image"] = {"format": "UDZO", "compressed": True, "read_only": True, "verified": True}
     manifest_path = output / "release-manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    checksummed = [source_zip, binary_zip, manifest_path]
+    checksummed = [*artifact_paths, manifest_path]
     (output / "SHA256SUMS").write_text("".join(f"{digest(path)}  {path.name}\n" for path in checksummed), encoding="utf-8")
-    print(f"PASS: {len(entries)} staged source files, tree {tree}, version {version}, copied app plist/ad-hoc signature, both ZIPs and SHA256SUMS")
+    extra = ", verified compressed read-only DMG" if dmg else ""
+    print(f"PASS: {len(entries)} staged source files, tree {tree}, version {version}, copied app plist/ad-hoc signature, both ZIPs{extra} and SHA256SUMS")
     print(output.relative_to(ROOT).as_posix())
     print("Unique staging copy retained; no source app changes, launch, cleanup, commit or push performed.")
 

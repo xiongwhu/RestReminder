@@ -6,3 +6,6 @@
 /Resources/morning-light.jpg
 /Resources/fresh-leaves.jpg
 .gstack/
+
+# Python packaging-test bytecode.
+__pycache__/

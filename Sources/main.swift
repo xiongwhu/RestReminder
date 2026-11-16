@@ -26,7 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "正在等待键鼠活动", action: nil, keyEquivalent: "")
     private let audioStatusLine = NSMenuItem(title: "正在初始化音量检测", action: nil, keyEquivalent: "")
-    private let pauseItem = NSMenuItem(title: "暂停提醒", action: #selector(togglePause), keyEquivalent: "")
+    private let pauseItem = NSMenuItem(title: "暂停提醒（记录继续）", action: #selector(togglePause), keyEquivalent: "")
+    private let reminderStatusLine = NSMenuItem(title: "未完成提醒 0 / 3 · 下次普通提醒", action: nil, keyEquivalent: "")
+    private let historyErrorItem = NSMenuItem(title: "本地记录保存异常…", action: #selector(showHistory), keyEquivalent: "")
     private var timer: Timer?
     private var session = ActivitySession()
     private var voluntaryRest = VoluntaryRestSession()
@@ -52,10 +54,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     private var lastRingPresentation: StatusRingPresentation?
     private lazy var automaticProtection = NSButton(checkboxWithTitle: "会议/演示自动避让", target: self,
                                                     action: #selector(toggleAutomaticProtection))
-    private var automaticProtectionEnabled: Bool { UserDefaults.standard.bool(forKey: "automaticPresentationProtection") }
-    private var manualProtectionEnabled: Bool { UserDefaults.standard.bool(forKey: "manualPresentationProtection") }
+    private var automaticProtectionEnabled: Bool { preferences.bool(forKey: "automaticPresentationProtection") }
+    private var manualProtectionEnabled: Bool { preferences.bool(forKey: "manualPresentationProtection") }
     private var automaticAlert: NSAlert?
-    private let history = ActivityHistory()
+    private var presentationID = UUID()
+    private let preferences: UserDefaults
+    private let history: ActivityHistory
     private var historyWindow: HistoryWindow?
     private var systemRest = SystemRestState()
     private var lockObservers: [NSObjectProtocol] = []
@@ -75,29 +79,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
                                                   action: #selector(toggleMaintenance))
     private var workspaceObservers: [NSObjectProtocol] = []
     private var instanceObserver: NSObjectProtocol?
-    private var interval: Double { UserDefaults.standard.double(forKey: "intervalMinutes") * 60 }
-    private var restThreshold: Double { UserDefaults.standard.double(forKey: "restMinutes") * 60 }
+    private var interval: Double { ReminderSettings.Duration.work.minutes(in: preferences) * 60 }
+    private var restThreshold: Double { ReminderSettings.Duration.rest.minutes(in: preferences) * 60 }
     private var now: Double { ProcessInfo.processInfo.systemUptime }
     private var voluntaryNow: TimeInterval { voluntaryClockOrigin.duration(to: RestContinuousClock().now) }
 
+    init(history: ActivityHistory = ActivityHistory(), preferences: UserDefaults = .standard) {
+        self.history = history
+        self.preferences = preferences
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UserDefaults.standard.register(defaults: ["intervalMinutes": 30.0, "restMinutes": 2.0,
-                                                  "automaticPresentationProtection": true,
-                                                  "manualPresentationProtection": false])
+        ReminderSettings.normalize(in: preferences)
+        preferences.register(defaults: ["automaticPresentationProtection": true,
+                                        "manualPresentationProtection": false])
         instanceObserver = DistributedNotificationCenter.default().addObserver(
             forName: SingleInstanceGuard.notificationName, object: SingleInstanceGuard.notificationObject,
             queue: .main) { [weak self] notification in
                 MainActor.assumeIsolated { self?.handleInstanceIntent(notification) }
             }
-        adviceCycle = RestAdviceCycle(nextIndex: UserDefaults.standard.integer(forKey: "restAdviceNextIndex"))
-        escalation = RestEscalation(reminderCount: UserDefaults.standard.integer(forKey: "unrestedReminderCount"),
-                                    emergencyDueAt: UserDefaults.standard.object(forKey: "strongRestDueAt") as? Date)
+        adviceCycle = RestAdviceCycle(nextIndex: preferences.integer(forKey: "restAdviceNextIndex"))
+        escalation = RestEscalation(reminderCount: preferences.integer(forKey: "unrestedReminderCount"),
+                                    emergencyDueAt: preferences.object(forKey: "strongRestDueAt") as? Date)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = StatusProgressRing.image(for: StatusRingPresentation(progress: 0, mode: .work))
         statusItem.button?.image?.isTemplate = true
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "歇一会儿 · 休息提醒", action: nil, keyEquivalent: ""))
         menu.addItem(statusLine)
+        menu.addItem(reminderStatusLine)
         menu.addItem(audioStatusLine)
         menu.addItem(protectionStatusLine)
         menu.addItem(.separator())
@@ -113,11 +124,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         menu.addItem(pauseItem)
         let resetItem = NSMenuItem(title: "重新计时", action: #selector(resetSession), keyEquivalent: "")
         resetItem.target = self
+        resetItem.toolTip = "重新开始工作计时，不会清除未完成提醒次数或应急全屏期限；记录继续。"
         menu.addItem(resetItem)
         menu.addItem(.separator())
         let historyItem = NSMenuItem(title: "工作与休息记录…", action: #selector(showHistory), keyEquivalent: "")
         historyItem.target = self
         menu.addItem(historyItem)
+        historyErrorItem.target = self
+        historyErrorItem.isHidden = true
+        menu.addItem(historyErrorItem)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出歇一会儿", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
@@ -142,15 +157,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         timer = Timer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         RunLoop.main.add(timer!, forMode: .common)
         tick()
-        if CommandLine.arguments.contains("--show-settings") || !UserDefaults.standard.bool(forKey: "hasLaunched") {
+        if CommandLine.arguments.contains("--show-settings") || !preferences.bool(forKey: "hasLaunched") {
             showSettings()
-            UserDefaults.standard.set(true, forKey: "hasLaunched")
+            preferences.set(true, forKey: "hasLaunched")
         }
         if CommandLine.arguments.contains("--show-history") { showHistory() }
     }
 
     @objc private func tick() {
-        defer { updateStatusRing() }
+        defer { updateMenuStatus(); updateStatusRing() }
         let audioState = audioMonitor.state()
         switch audioState {
         case .playing: audioStatusLine.title = "检测到实际音频信号"
@@ -174,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         meetingProtectionItem.state = manualProtectionEnabled ? .on : .off
         meetingProtectionItem.title = manualProtectionEnabled ? "结束会议/演示免打扰" : "开启会议/演示免打扰"
         if manualProtectionEnabled {
-            protectionStatusLine.title = "会议/演示免打扰 · 手动开启"
+            protectionStatusLine.title = "会议/演示免打扰 · 手动开启，直到关闭"
             suppressionTitle = "会议/演示免打扰"
         } else if protection.suppressesReminders {
             protectionStatusLine.title = "自动避让：" + protection.reasons.joined(separator: "、")
@@ -236,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         if escalation.isStrongRestActive {
             if suppress || session.paused {
                 strongRestWindow.hide()
-                statusLine.title = session.paused ? "提醒已暂停" : "\(suppressionTitle) · 全屏休息暂缓"
+                statusLine.title = session.paused ? "提醒已暂停 · 记录继续" : "\(suppressionTitle) · 全屏休息暂缓"
             } else {
                 showStrongRest(idle: idle)
             }
@@ -248,17 +263,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
                              advice: feedback == .needsMoreRest ? nextRestAdvice(preview: false) : nil)
         }
         if session.paused {
-            statusLine.title = "提醒已暂停"
+            statusLine.title = "提醒已暂停 · 记录继续"
         } else if suppress {
             statusLine.title = suppressionTitle
         } else if let emergencyRemaining {
-            let seconds = Int(ceil(emergencyRemaining))
-            statusLine.title = String(format: "应急延后 %02d:%02d · 随后继续休息", seconds / 60, seconds % 60)
+            statusLine.title = "应急延后 \(ReminderSettings.countdownText(emergencyRemaining)) · 随后继续全屏休息"
         } else if session.startedAt == nil {
             statusLine.title = "已休息，等待键鼠活动"
         } else {
-            let seconds = Int(ceil(session.remaining(now: now, interval: interval)))
-            statusLine.title = seconds == 0 ? "休息时间到了，等待操作后提醒" : String(format: "距离休息 %02d:%02d", seconds / 60, seconds % 60)
+            let remaining = session.remaining(now: now, interval: interval)
+            statusLine.title = remaining <= 0 ? "休息时间到了，等待操作后提醒"
+                : "距离休息 \(ReminderSettings.countdownText(remaining))"
         }
         statusItem.button?.toolTip = "歇一会儿：\(statusLine.title)"
         if shouldRemind {
@@ -276,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         let previousApplication = NSWorkspace.shared.frontmostApplication
         let date = Date()
         guard voluntaryRest.start(at: voluntaryNow) else { return }
+        presentationID = UUID()
         voluntaryWorkSeconds = session.startedAt.map { max(0, now - $0) } ?? 0
         voluntaryAdvice = nextRestAdvice(preview: false)
         // The explicit menu click is fresh input. Close any preceding idle span,
@@ -318,14 +334,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         tick()
     }
 
-    private func restClockText(_ elapsed: TimeInterval) -> String {
-        let seconds = Int(min(Double(Int.max).nextDown, max(0, elapsed.isFinite ? elapsed : 0)))
-        func padded(_ value: Int) -> String { value < 10 ? "0\(value)" : String(value) }
-        let tail = "\(padded(seconds / 60 % 60)):\(padded(seconds % 60))"
-        return seconds >= 3600 ? "\(padded(seconds / 3600)):\(tail)" : tail
-    }
+    private func restClockText(_ elapsed: TimeInterval) -> String { ReminderSettings.restClockText(elapsed) }
 
     private func beginFullScreenRest(advice: RestAdvice? = nil, returningTo application: NSRunningApplication? = nil) {
+        presentationID = UUID()
         let work = session.startedAt.map { max(0, now - $0) } ?? interval
         escalation.beginStrongRest(at: Date(), workSeconds: work)
         activeStrongAdvice = advice ?? nextRestAdvice(preview: false)
@@ -346,9 +358,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     }
 
     private func saveEscalation() {
-        UserDefaults.standard.set(escalation.reminderCount, forKey: "unrestedReminderCount")
+        preferences.set(escalation.reminderCount, forKey: "unrestedReminderCount")
         let due = escalation.isStrongRestActive ? Date() : escalation.emergencyDueAt
-        UserDefaults.standard.set(due, forKey: "strongRestDueAt")
+        preferences.set(due, forKey: "strongRestDueAt")
     }
 
     private func deferStrongRest() {
@@ -357,6 +369,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         strongRestWindow.hide()
         session.deferReminder(now: now, seconds: 300)
         tick()
+    }
+
+    private func updateMenuStatus() {
+        let next = escalation.nextAction == .strongRest ? "全屏休息" : "普通提醒"
+        let obligation = escalation.isStrongRestActive ? "待完成全屏休息" : "下次到期：\(next)"
+        reminderStatusLine.title = "未完成提醒 \(escalation.reminderCount) / 3 · \(obligation)"
+        reminderStatusLine.toolTip = "完成连续休息后清零；三次普通提醒仍未完成休息，下次到期全屏。应急延后到期也继续全屏。"
+        historyErrorItem.isHidden = history.persistenceError == nil
+        historyErrorItem.toolTip = history.persistenceError.map { $0 + "\n点击打开工作与休息记录。" }
     }
 
     private func updateStatusRing() {
@@ -374,12 +395,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     }
 
     @objc private func toggleMeetingProtection() {
-        UserDefaults.standard.set(!manualProtectionEnabled, forKey: "manualPresentationProtection")
+        preferences.set(!manualProtectionEnabled, forKey: "manualPresentationProtection")
         tick()
     }
 
     @objc private func toggleAutomaticProtection() {
-        UserDefaults.standard.set(automaticProtection.state == .on, forKey: "automaticPresentationProtection")
+        preferences.set(automaticProtection.state == .on, forKey: "automaticPresentationProtection")
         if !automaticProtectionEnabled { presentationQuietUntil = 0 }
         tick()
     }
@@ -387,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     @objc private func togglePause() {
         session.paused.toggle()
         session.reset()
-        pauseItem.title = session.paused ? "恢复提醒" : "暂停提醒"
+        pauseItem.title = session.paused ? "恢复提醒（记录继续）" : "暂停提醒（记录继续）"
         tick()
     }
 
@@ -436,6 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         case .openHistory: showHistory()
         case .openSettings: showSettings()
         case .activate:
+            presentationID = UUID()
             NSApp.activate(ignoringOtherApps: true)
             if !alertVisible && !escalation.isStrongRestActive && !voluntaryRest.isActive && !NSApp.windows.contains(where: { $0.isVisible }) { showSettings() }
         }
@@ -448,6 +470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     }
 
     @objc private func showHistory() {
+        presentationID = UUID()
         if historyWindow == nil {
             historyWindow = HistoryWindow(history: history,
                                           workInterval: { [weak self] in self?.interval ?? 1800 },
@@ -478,13 +501,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     private func nextRestAdvice(preview: Bool) -> RestAdvice {
         if preview { return previewAdviceCycle.next() }
         let advice = adviceCycle.next()
-        UserDefaults.standard.set(adviceCycle.nextIndex, forKey: "restAdviceNextIndex")
+        preferences.set(adviceCycle.nextIndex, forKey: "restAdviceNextIndex")
         return advice
     }
 
     private func showReminder(preview: Bool) {
         guard !alertVisible else { return }
         let previousApplication = NSWorkspace.shared.frontmostApplication
+        let reminderID = UUID()
+        presentationID = reminderID
         alertVisible = true
         if !preview {
             escalation.didPresentGentleReminder()
@@ -515,6 +540,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         alertVisible = false
         alert.window.orderOut(nil)
         guard !preview else { return }
+        defer { restoreApplication(previousApplication, after: reminderID) }
+        // New window intents suppress only focus restoration. A still-visible
+        // reminder's explicit button response remains valid after app reactivation.
+        guard !systemRest.isInactive, !voluntaryRest.isActive, !escalation.isStrongRestActive else { return }
         switch result {
         case .alertFirstButtonReturn:
             session.beginRest(now: now, seconds: restThreshold)
@@ -526,11 +555,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         }
     }
 
-    private func formatMinutes(_ value: Double) -> String {
-        value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
+    private func restoreApplication(_ application: NSRunningApplication?, after reminderID: UUID) {
+        // Let modal teardown finish, then apply the same frontmost-app check as fullscreen hide().
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.presentationID == reminderID, !self.alertVisible,
+                  !self.systemRest.isInactive, !self.voluntaryRest.isActive, !self.escalation.isStrongRestActive,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+                  let application, !application.isTerminated,
+                  application.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+            application.activate(options: [])
+        }
     }
 
+    private func formatMinutes(_ value: Double) -> String { ReminderSettings.formatMinutes(value) }
+
     @objc private func showSettings() {
+        presentationID = UUID()
         if settingsWindow == nil { buildSettingsWindow() }
         intervalField.doubleValue = interval / 60
         restField.doubleValue = restThreshold / 60
@@ -559,9 +599,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         let title = NSTextField(labelWithString: "给专注留一点呼吸的空间 🌿")
         title.font = .systemFont(ofSize: 21, weight: .semibold)
         stack.addArrangedSubview(title)
-        let subtitle = NSTextField(wrappingLabelWithString: "在菜单栏安静陪伴你，到时间轻轻提醒。")
+        let subtitle = NSTextField(wrappingLabelWithString: "关闭窗口后仍驻留菜单栏。点击菜单栏圆环，可查看状态、主动休息或再次打开设置。")
         subtitle.textColor = .secondaryLabelColor
         stack.addArrangedSubview(subtitle)
+        subtitle.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        let modes = NSTextField(wrappingLabelWithString: "两种休息方式\n自动提醒：到期后提醒，选择休息进入全屏，连续离开键鼠达到设定时长才算完成。\n主动休息：从菜单选择“现在就休息”，正向计时直到点击“结束休息”，键鼠操作不会重置。\n\n未完成休息的普通提醒累计三次后，下次到期进入全屏。普通提醒可延后 5 分钟；全屏提供“有急事，再给我 5 分钟”出口，到期继续全屏休息。")
+        modes.font = .systemFont(ofSize: 12)
+        modes.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(modes)
+        modes.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         for (label, field) in [("连续使用多久后提醒", intervalField), ("无操作多久算已休息", restField)] {
             field.widthAnchor.constraint(equalToConstant: 70).isActive = true
             field.alignment = .right
@@ -571,6 +617,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
             row.spacing = 12
             stack.addArrangedSubview(row)
         }
+        validationLabel.textColor = .systemRed
+        validationLabel.font = .systemFont(ofSize: 12)
+        stack.addArrangedSubview(validationLabel)
+        validationLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         automaticProtection.toolTip = "自动避让摄像头/麦克风占用、镜像投屏和 Keynote/PowerPoint 全屏窗口。系统专注、共享屏幕或浏览器演示请从菜单手动开启会议/演示免打扰。"
         stack.addArrangedSubview(automaticProtection)
         let loginSettings = NSButton(title: "系统登录项…", target: self, action: #selector(openLoginItems))
@@ -586,10 +636,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         detail.textColor = .secondaryLabelColor
         stack.addArrangedSubview(detail)
         detail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        validationLabel.textColor = .systemRed
-        validationLabel.font = .systemFont(ofSize: 12)
-        stack.addArrangedSubview(validationLabel)
-        validationLabel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         let divider = NSBox()
         divider.boxType = .separator
@@ -741,17 +787,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
         settingsSaveWork = nil
         var changed = false
         var errors: [String] = []
-        for (field, key, range, name) in [
-            (intervalField, "intervalMinutes", 0.1...240.0, "提醒间隔"),
-            (restField, "restMinutes", 0.1...60.0, "休息时长")
-        ] {
-            let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let value = Double(text), value.isFinite, range.contains(value) else {
-                errors.append("\(name)需为 0.1–\(Int(range.upperBound)) 分钟")
+        for (field, duration) in [(intervalField, ReminderSettings.Duration.work), (restField, .rest)] {
+            guard let value = duration.parsedMinutes(field.stringValue) else {
+                errors.append("\(duration.name)需为 0.1–\(formatMinutes(duration.range.upperBound)) 分钟")
                 continue
             }
-            if value != UserDefaults.standard.double(forKey: key) {
-                UserDefaults.standard.set(value, forKey: key)
+            if value != duration.validatedMinutes(preferences.object(forKey: duration.key)) {
+                preferences.set(value, forKey: duration.key)
                 changed = true
             }
         }
@@ -763,6 +805,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, N
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
+#if REMINDER_UI_SMOKE
+MainActor.assumeIsolated { AppDelegateSmoke.main() }
+#else
 MainActor.assumeIsolated {
     // Own the per-user writer lock before AppDelegate can load or modify history.
     switch SingleInstanceGuard.acquire() {
@@ -792,3 +837,4 @@ MainActor.assumeIsolated {
         exit(EXIT_FAILURE)
     }
 }
+#endif

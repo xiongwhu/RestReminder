@@ -50,6 +50,7 @@ jobs:
           /bin/bash -n scripts/test.sh
           /usr/bin/plutil -lint Info.plist
           python3 scripts/check-docs.py
+          python3 -m unittest discover -s Tests -p 'test_release_packaging.py'
           ./scripts/test.sh
 
       - name: Build both architectures with verified deployment minima
